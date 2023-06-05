@@ -1,0 +1,12 @@
+*~
+*.tmp
+.DS_Store
+.idea
+*.log
+tmp/
+coverage
+
+
+bin/
+.vscode/
+*.code-workspace
