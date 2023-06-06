@@ -28,8 +28,8 @@ Example:
 ## Example
 ```bash
 ./bin/downloader -s https://mirror.math.princeton.edu/pub/ubuntu-iso/23.04/ubuntu-23.04-live-server-amd64.iso -s https://forksystems.mm.fcix.net/ubuntu-releases/23.04/ubuntu-23.04-live-server-amd64.iso -s https://southfront.mm.fcix.net/ubuntu-releases/23.04/ubuntu-23.04-live-server-amd64.iso -s https://southfront.mm.fcix.net/ubuntu-releases/23.04/ubuntu-23.04-netboot-amd64.tar.gz -s https://mirror.math.princeton.edu/pub/ubuntu-iso/23.04/ubuntu-23.04-netboot-amd64.tar.gz
-
-
+```
+```bash
 2023/06/06 15:42:48 Starting download file ubuntu-23.04-netboot-amd64.tar.gz; sources:
  [https://southfront.mm.fcix.net/ubuntu-releases/23.04/ubuntu-23.04-netboot-amd64.tar.gz https://mirror.math.princeton.edu/pub/ubuntu-iso/23.04/ubuntu-23.04-netboot-amd64.tar.gz]
 
