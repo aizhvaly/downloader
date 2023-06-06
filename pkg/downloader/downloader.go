@@ -11,14 +11,12 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
+	"time"
 
-	"github.com/vbauerster/mpb/v8"
+	mpb "github.com/vbauerster/mpb/v8"
 )
-
-type Downloader interface {
-	Download() error
-}
 
 type downloader struct {
 	withSync        bool
@@ -39,7 +37,11 @@ type DownloaderConfig struct {
 	Sources         map[string][]string
 }
 
-func New(cfg *DownloaderConfig) (Downloader, error) {
+func New(cfg *DownloaderConfig) (*downloader, error) {
+	if len(cfg.Sources) == 0 {
+		return nil, errors.New("no sources provided")
+	}
+
 	files := make([]*file, 0, len(cfg.Sources))
 	var totalSize int64
 l:
@@ -86,7 +88,7 @@ l:
 				}
 
 				for i, ar := range acceptRanges {
-					if ar && !acceptRange || (!ar && !acceptRange) {
+					if (ar && !acceptRange) || (!ar && !acceptRange) {
 						continue s
 
 					}
@@ -109,13 +111,13 @@ l:
 		}
 
 		if len(urls) == 0 {
-			fmt.Printf("No valid source urls found for file %s, skip\n", name)
+			log.Printf("No valid source urls found for file %s, skip\n", name)
 			continue
 		}
 
 		fd, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 		if err != nil {
-			fmt.Printf("failed to open file %s: %v\n", name, err)
+			log.Printf("failed to open file %s: %v\n", name, err)
 			continue
 		}
 
@@ -127,6 +129,10 @@ l:
 		})
 
 		totalSize += size
+	}
+
+	if len(files) == 0 {
+		return nil, errors.New("no valid sources provided")
 	}
 
 	return &downloader{
@@ -184,6 +190,10 @@ func (d *downloader) Download() error {
 }
 
 func (d *downloader) download(ctx context.Context, f *file, n int) error {
+	if n <= 0 {
+		return fmt.Errorf("invalid number of workers: %d", n)
+	}
+
 	newCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -194,58 +204,68 @@ func (d *downloader) download(ctx context.Context, f *file, n int) error {
 		},
 	}
 
-	nChunks := int(math.Ceil(float64(f.size) / float64(d.chunkSize)))
-	processCh := make(chan chunk, nChunks/d.workersPerFile+1)
-	writeCh := make(chan chunk, nChunks/d.workersPerFile+1)
-	defer close(writeCh)
-
+	errList := make([]string, 0)
+	errCh := make(chan error)
 	go func() {
-		if err := f.writeChunks(newCtx, writeCh, pool, d.withSync); err != nil {
-			log.Printf("Error occured while write file %s: %v\n", f.name(), err)
-			cancel()
+		for e := range errCh {
+			errList = append(errList, e.Error())
 		}
 	}()
+
+	nChunks := int(math.Ceil(float64(f.size) / float64(d.chunkSize)))
+
+	processCh := make(chan chunk, nChunks/d.workersPerFile+1)
+	writeCh := make(chan chunk, nChunks/d.workersPerFile+1)
 
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		if err := f.writeChunks(newCtx, writeCh, pool, d.withSync); err != nil {
+			errCh <- fmt.Errorf("failed to write chunks: %w", err)
+			cancel()
+		}
+	}()
+
+	// intentional leak
+	// it will not close properly if all workers will fail
+	go func() {
+		defer close(processCh)
+
 		var i int64
 		for i = 0 * d.chunkSize; i < f.size; i += d.chunkSize {
 			processCh <- chunk{start: int64(i), stop: min(f.size, int64(i)+d.chunkSize) - 1}
 		}
-
-		close(processCh)
 	}()
 
+	workers_wg := &sync.WaitGroup{}
 	for i := 0; i < n; i++ {
-		wg.Add(1)
+		workers_wg.Add(1)
 		go func(i int) {
-			defer wg.Done()
+			defer workers_wg.Done()
 
 			for {
 				select {
+				case <-ctx.Done():
+					return
 				case ch, ok := <-processCh:
 					if !ok {
 						return
 					}
 
 					if err := processChunk(newCtx, f.getURL(i), ch, pool, writeCh); err != nil {
-						if err := retrier.add(ch); err != nil {
-							log.Printf("Failed to process chunk %d-%d and add to retry, %s: %v\n", ch.start, ch.stop, f.name(), err)
+						if err2 := retrier.add(ch); err2 != nil {
+							errCh <- fmt.Errorf("failed to add chunk to retry: %v/%v", err, err2)
 							cancel()
+							return
 						}
-
-						continue
 					}
-				case <-newCtx.Done():
-					return
 				}
 			}
 
 		}(i)
 	}
-	wg.Wait()
+	workers_wg.Wait()
 
 	faieldChunks := retrier.getAll()
 l:
@@ -254,8 +274,11 @@ l:
 			k := i + j
 			if err := processChunk(newCtx, f.getURL(k), ch, pool, writeCh); err != nil {
 				if j == d.retries-1 {
-					return fmt.Errorf("failed to download chunk %d-%d", ch.start, ch.stop)
+					errCh <- fmt.Errorf("failed to process chunk %d-%d : %v", ch.start, ch.stop, err)
+					cancel()
+					break l
 				}
+
 				continue
 			}
 
@@ -263,11 +286,23 @@ l:
 		}
 	}
 
+	close(writeCh)
+	wg.Wait()
+	close(errCh)
+
+	if len(errList) > 0 {
+		return fmt.Errorf("%s", strings.Join(errList, " |--> "))
+	}
+
 	return nil
 }
 
 func processChunk(ctx context.Context, url string, ch chunk, pool *sync.Pool, writeCh chan<- chunk) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	// in case of really low bandwidth
+	tctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(tctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create http request: %w", err)
 	}
@@ -290,7 +325,7 @@ func processChunk(ctx context.Context, url string, ch chunk, pool *sync.Pool, wr
 	}
 
 	if _, err := io.Copy(b, res.Body); err != nil {
-		return fmt.Errorf("failed to write data to buffer")
+		return fmt.Errorf("failed to write data to buffer: %v", err)
 	}
 
 	ch.data = b
@@ -336,6 +371,10 @@ func parseHeaders(resp *http.Response) (int64, bool, error) {
 	lenght, err := strconv.ParseInt(contentLenght[0], 10, 64)
 	if err != nil {
 		return 0, false, fmt.Errorf("failed to parse Content-Length: %v", err)
+	}
+
+	if lenght == 0 {
+		return 0, false, errors.New("Content-Length is 0")
 	}
 
 	return lenght, resp.Header.Get("Accept-Ranges") == "bytes", nil

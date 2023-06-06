@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/vbauerster/mpb/v8"
+	mpb "github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
 )
 

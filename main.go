@@ -31,15 +31,15 @@ Usage:
 
 Flags:
 	-h, --help		Help message
-	-w, --with-sync		Download with sync means using file sync after successful download. Default: false
+	-w, --with-sync		Download with sync means using file sync after successful download. Default: false.
 	-c, --chunk-size	Chunk size in bytes. Default: 5MB. Min 512KB, Max 30MB.
-	-f, --failed-chunks	Max	count of failed chunks to retry. Default: 10
-	-r, --retries		Max retries for every failed download file chunk. Default: 3
-	-s, --sources		Source file urls. Shoud be passed with "," as separator without space
+	-f, --failed-chunks	Max	count of failed chunks to retry. Default: 10.
+	-r, --retries		Max retries for every failed download file chunk. Default: 3.
+	-s, --sources		Source file urls. Shoud be passed with "," as separator without space. Or every new source with  "-s" flag.
 	
 Example:
 	downloader -s https://example.com/file1,https://example.com/file2 - for downloading two files from example.com
-	downloader -s https://example1.com/file1,https://example2.com/file1 - for downloading one file from different sources
+	downloader -s https://example1.com/file1 -s https://example2.com/file1 - for downloading one file from different sources
 `
 
 var (
@@ -53,7 +53,7 @@ func main() {
 	pflag.Int64VarP(&chunkSize, "chunk-size", "c", 5*1000*1000, "Chunk size in bytes. Default: 5MB. Min 512KB, Max 30MB.")
 	pflag.IntVarP(&retries, "retries", "r", 3, "Max retries for failed file chunks. Default: 3")
 	pflag.IntVarP(&failedChunks, "failed-chunks", "f", 10, "Max count of failed chunks to retry. Default: 10")
-	pflag.StringSliceVarP(&sources, "sources", "s", []string{}, "Source file urls. Shoud be passed with `,` as separator without spaces.")
+	pflag.StringSliceVarP(&sources, "sources", "s", []string{}, "Source file urls. Shoud be passed with `,` as separator without spaces.  Or every new source with  '-s' flag.")
 	pflag.Parse()
 	n := runtime.NumCPU()
 
